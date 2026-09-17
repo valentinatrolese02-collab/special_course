@@ -5,17 +5,14 @@ on a sphere, using plain numpy/scipy/matplotlib.
 Construction:
   - point cloud = manifold samples (no equation of the sphere is used except
     for the final retraction, which stands in for a DRGD-style correction)
-  - W          = explicit sparse adjacency matrix (Eq. 11's hard cutoff),
+  - W          = explicit sparse adjacency matrix (Eq. 11),
                  built once from an eps-ball proximity graph (here computed as sparse array)
   - D          = diagonal degree matrix for each node of the graph
   - L(X)       = random-walk graph Laplacian applied to coordinates (Eq. 11)
   - Gamma_raw  = carre-du-champ (Eq. 7) applied to ambient coordinate
-                 functions -- the literal, uncalibrated finite-sample
-                 estimator, NOT reprojected into a clean {0,1}-eigenvalue
-                 projector. Its eigenvalues are only guaranteed to be
-                 non-negative in the N->inf, eps->0 limit (Corollary 4.2).
+                 functions
   - Gammas     = Gamma_raw^(1/2), the actual matrix square root used by
-                 Algorithm 1's noise term -- NOT Gamma_raw itself.
+                 Algorithm 1's noise term
   - Euler-Maruyama integration (Eq. 15)
 """
 import numpy as np
@@ -110,15 +107,20 @@ def matrix_sqrt_psd(Gamma_raw):
     """Matrix square root of a stack of symmetric matrices, via scipy's
     sqrtm (batches over the leading dimension).
 
-    If Gamma_raw isn't positive semi-definite at some point -- a real
-    possibility at finite N, since the theory only guarantees PSD in the
-    N->inf, eps->0 limit (Corollary 4.2) -- sqrtm returns a complex value
-    there (not a rotation: Gamma_raw is symmetric, so its eigenvalues are
-    always real; the complex part comes purely from taking sqrt() of a
-    negative real eigenvalue). We detect that, report it, and discard the
-    imaginary part -- exactly equivalent to clipping that eigenvalue to 0
-    before the square root, i.e. injecting zero noise along whichever
-    direction the estimator's PSD guarantee failed at."""
+    Theoretic Gamma(f,g) = L(fg) - f*Lg - g*Lf with L beltrami operator == projector matrix,
+    so it should have no negative eigenvalues.
+
+    However our Gamma is the approximated one, and its eigenvalues are only guaranteed
+    non-negative in the N->inf, eps->0 limit (from Corollary 4.2 of Bamberger et al.,
+    "Riemannian Metric Matching" paper, whose finite-bandwidth Gamma_eps estimator
+    is structurally analogous to this. The IMD paper's just tackles the continuum 
+    (not finite-N) version of this projector property).
+    
+    This function simulates the real keeps only the real part of eigenvalues, 
+    discarding whatever imaginary component results.
+    This way on the simulation we remain on the manifold's domain in R^3.
+    """
+
     Gamma_half = sqrtm(Gamma_raw)
 
     n_imaginary = np.sum(np.any(np.abs(Gamma_half.imag) > 1e-9, axis=(1, 2)))
@@ -128,66 +130,125 @@ def matrix_sqrt_psd(Gamma_raw):
 
     return Gamma_half.real
 
+def simulate_imd(X, tree, L_vecs, Gammas, n_steps, h, rng):
+    """
+    It simulates the IMD process with drift, CDC noise, and NO retraction step.
 
-def simulate_trajectory(X, tree, L_vecs, Gammas, n_steps, h, radius, rng):
+    """
     n_dim = X.shape[1]
     traj = np.zeros((n_steps + 1, n_dim))
-    traj[0] = X[rng.integers(len(X))]
+    traj[0] = X[rng.integers(len(X))] # randomly picks one of the sampled data points to start from
+
     for l in range(n_steps):
-        _, i = tree.query(traj[l])
+        _, i = tree.query(traj[l]) # returns distances to the nearest neighbors, index of each neighbor
         xi = rng.normal(size=n_dim)
-        step = h * L_vecs[i] + np.sqrt(h) * (Gammas[i] @ xi)
-        new_p = traj[l] + step
-        traj[l + 1] = new_p / np.linalg.norm(new_p) * radius
+        traj[l+1] = traj[l] + h * L_vecs[i] + np.sqrt(h) * (Gammas[i] @ xi) #Euler Maruyama discretization
+
     return traj
 
-
-def plot_result(X, traj, out_path):
-    fig = plt.figure(figsize=(6, 6))
+ 
+ 
+def plot_result_sphere(X, traj, radius, out_path):
+    """Same idea as plot_result, but rendered closer to the paper's
+    Figure 6 style: a smooth shaded sphere surface instead of a raw
+    point-cloud scatter, and the trajectory drawn as a connected line
+    instead of scattered dots."""
+    fig = plt.figure(figsize=(7, 7))
     ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(*X.T, color='0.6', s=2, alpha=0.5, linewidths=0)
-    ax.scatter(*traj.T, color='red', s=3, alpha=0.9, linewidths=0)
+ 
+    u = np.linspace(0, 2 * np.pi, 60)
+    v = np.linspace(0, np.pi, 30)
+    xs = radius * np.outer(np.cos(u), np.sin(v))
+    ys = radius * np.outer(np.sin(u), np.sin(v))
+    zs = radius * np.outer(np.ones_like(u), np.cos(v))
+    ax.plot_surface(xs, ys, zs, color='0.85', alpha=0.5, linewidth=0, shade=True, zorder=0)
+ 
+    ax.scatter(*X.T, color='0.5', s=1, alpha=0.15, linewidths=0, zorder=1)
+    ax.plot(*traj.T, color='tab:blue', linewidth=0.9, alpha=0.9, zorder=2)
+ 
     ax.set_box_aspect([1, 1, 1])
     ax.set_axis_off()
     ax.view_init(elev=20, azim=35)
     plt.tight_layout()
-    plt.savefig(out_path, dpi=200)
+    plt.savefig(out_path, dpi=220)
     plt.close(fig)
 
+def plot_result_cube(X, traj, L, out_path):
+    """Same idea as plot_result_sphere, but for the cube: draws the 6 flat
+    shaded faces instead of a sphere surface, trajectory as a connected line."""
+    fig = plt.figure(figsize=(7, 7))
+    ax = fig.add_subplot(111, projection='3d')
 
-def main():
-    rng = np.random.default_rng(0)
-    N = 6000
-    h = 0.1
-    n_traj_steps = 40000
-    R = 1.0
-    c = -1.0  # sign-flipped: matches centroid-seeking drift and correct CDC eigenvalue sign
+    r = np.linspace(-L, L, 2)
+    g1, g2 = np.meshgrid(r, r)
 
-    t0 = time.time()
+    for xval in [-L, L]:
+        ax.plot_surface(np.full_like(g1, xval), g1, g2, color='0.85', alpha=0.35, linewidth=0, shade=True, zorder=0)
+    for yval in [-L, L]:
+        ax.plot_surface(g1, np.full_like(g1, yval), g2, color='0.85', alpha=0.35, linewidth=0, shade=True, zorder=0)
+    for zval in [-L, L]:
+        ax.plot_surface(g1, g2, np.full_like(g1, zval), color='0.85', alpha=0.35, linewidth=0, shade=True, zorder=0)
+
+    ax.scatter(*X.T, color='0.5', s=1, alpha=0.15, linewidths=0, zorder=1)
+    ax.plot(*traj.T, color='tab:blue', linewidth=0.9, alpha=0.9, zorder=2)
+
+    ax.set_box_aspect([1, 1, 1])
+    ax.set_axis_off()
+    ax.view_init(elev=20, azim=35)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=220)
+    plt.close(fig)
+ 
+ 
+def sphere(N, R, h, n_traj_steps, c, rng):
     X = sample_sphere(N, R, rng)
     tree = KDTree(X)
     epsilon = compute_bandwidth(X, tree)
     W = build_adjacency(tree, epsilon)
-    print(f"graph built: {time.time()-t0:.1f}s, nnz={W.nnz}")
-
-    t0 = time.time()
+ 
     L_vecs = laplacian_literal(X, W, c, epsilon)
-    print(f"L computed: {time.time()-t0:.1f}s")
-
-    t0 = time.time()
+ 
     Gamma_raw = CDC(X, W, c, epsilon)
-    Gammas = matrix_sqrt_psd(Gamma_raw)  # THE FIX: actual Gamma^(1/2), not Gamma itself
-    print(f"Gammas built: {time.time()-t0:.1f}s")
-
-    t0 = time.time()
-    traj = simulate_trajectory(X, tree, L_vecs, Gammas, n_traj_steps, h, R, rng)
-    print(f"trajectory simulated: {time.time()-t0:.1f}s")
-    print(f"final |traj| deviation from R=1: {abs(np.linalg.norm(traj[-1]) - R):.2e}")
-
-    os.makedirs("outputs", exist_ok=True)
-    plot_result(X, traj, "outputs/imd_sphere_brownian_epsball.png")
-    print("saved")
+    Gammas = matrix_sqrt_psd(Gamma_raw)
+ 
+    traj = simulate_imd(X, tree, L_vecs, Gammas, n_traj_steps, h, rng)
+    print(f"SPHERE: final |traj| deviation from R=1: {abs(np.linalg.norm(traj[-1]) - R):.2e}")
+ 
+    plot_result_sphere(X, traj, R, f"outputs/path_simulation/imd_sphere{seed}.png")
+    print("sphere saved")
 
 
+
+def cube(N, L, h, n_traj_steps, c, rng):
+
+    X = sample_cube(N, L, rng)
+    tree = KDTree(X)
+    epsilon = compute_bandwidth(X, tree)
+    W = build_adjacency(tree, epsilon)
+
+    L_vecs = laplacian_literal(X, W, c, epsilon)
+
+    Gamma_raw = CDC(X, W, c, epsilon)
+    Gammas = matrix_sqrt_psd(Gamma_raw)
+
+    traj = simulate_imd(X, tree, L_vecs, Gammas, n_traj_steps, h, rng)
+    print(f"CUBE: final cube-surface deviation (|max|coord| - L|): {abs(np.max(np.abs(traj[-1])) - L):.2e}")
+
+    plot_result_cube(X, traj, L, f"outputs/path_simulation/imd_cube{seed}.png")
+    print("cube saved")
+ 
+ 
 if __name__ == "__main__":
-    main()
+
+    seed = 44
+    rng = np.random.default_rng(seed)
+    N = 6000
+    h = 0.001
+    n_traj_steps = 2000
+    L = 1.0
+    c = -1.0  # sign-flipped: matches centroid-seeking drift and correct CDC eigenvalue sign
+
+    os.makedirs("outputs/path_simulation", exist_ok=True)
+
+    cube(N, L, h, n_traj_steps, c, rng)
+    sphere(N, L, h, n_traj_steps, c, rng) # R=L

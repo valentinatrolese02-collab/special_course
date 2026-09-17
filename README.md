@@ -6,6 +6,7 @@ We rely on ALgorithm 1: Implicit manifold-valued diffusions WITHOUT DRGD. In the
 ### Operators L, $\Gamma$
 
 The paper originally defines the RWGL on a graph over the point cloud $X_N$ (equation (11)) as:
+
 $$
 (\mathsf{L}_N u)(x_i) := \frac{c}{\epsilon^2} \sum_{i \sim j} \frac{W_{ij}}{m_i} \left( u(x_i) - u(x_j) \right)
 $$
@@ -16,16 +17,15 @@ $$
 \Gamma(f, g) := L(fg) - fLg - gLf
 $$
 
-Our first attempt consist in implementing these operators following precisely their definition.
-A second attempt would be to use the gamma operator following its definition of projector onto the tangent space.
-This is possible (in particular it allows us to compute the CDC as the projector operator) in the first examples because we know the manifold's equation.
+My first attempt consist in implementing these operators following precisely their definition.
 
-To compute the graph, we utilize the class cKDTree from scipy.spatial (identical to KDTree) which implements the nearest neighbor searching. 
+To compute the graph, I utilize the class cKDTree from scipy.spatial (identical to KDTree) which implements the nearest neighbor searching. 
 
 
 **Input:** point cloud $X_N$, step size $h > 0$, iterations $L$
 
 Initialize on $X_N$
+
 $$
 \bar X_0 \leftarrow \text{random point in } X_N
 $$
@@ -49,6 +49,3 @@ $$
 $$
 
 **Output:** trajectory $\{\bar X_\ell\}_{\ell=0}^L$
-
-
-Other attempt: $L(x_i)$ is a simplified neighbor-centroid proxy rather than the paper's precisely scaled random-walk graph Laplacian ($c/\epsilon^2$ normalization from Eq. 11); it reproduces the qualitative centripetal pull but hasn't been checked against their exact constant or sign convention.
