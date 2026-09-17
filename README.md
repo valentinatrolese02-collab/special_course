@@ -41,11 +41,7 @@ $$
 $$
 
 $$
-U_{\ell+1} = \bar X_\ell + h\, L(x_i) + \sqrt{h}\, \Gamma(x_i)\, \xi_{\ell+1} \qquad \text{(E-M step)}
-$$
-
-$$
-\bar X_{\ell+1} = \mathcal{R}(U_{\ell+1}) \qquad \text{(analytic retraction — not DRGD)}
+X_{\ell+1} = \bar X_\ell + h (L(X_\ell) + b(X_\ell)) + \sqrt{h}\, \Gamma(x_\ell)^{1/2} \, \xi_{\ell+1} \qquad \text{(E-M step, eq (15))}
 $$
 
 **Output:** trajectory $\{\bar X_\ell\}_{\ell=0}^L$
